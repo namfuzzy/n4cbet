@@ -43,7 +43,35 @@ const db = firebase.firestore();
 const auth = firebase.auth();
 const googleProvider = new firebase.auth.GoogleAuthProvider();
 
-const Icon = ({ name, className }) => { const iconDef = window.lucide[name]; if (!iconDef) return null; return React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '24', height: '24', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round', className: className }, iconDef.map(([tag, attrs], i) => React.createElement(tag, { ...attrs, key: i }))); }; async function generateContent(apiKey, model, prompt, base64Image, mimeType) { const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`; let parts = []; if (base64Image && mimeType) { parts.push({ inline_data: { mime_type: mimeType, data: base64Image } }); } parts.push({ text: prompt }); const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: 'application/json' } }) }); if (!response.ok) { const err = await response.json(); throw new Error(err.error?.message || 'Lỗi kết nối Gemini API'); } const data = await response.json(); return data.candidates[0].content.parts[0].text; }
+const Icon = ({ name, className }) => { const iconDef = window.lucide[name]; if (!iconDef) return null; return React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '24', height: '24', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round', className: className }, iconDef.map(([tag, attrs], i) => React.createElement(tag, { ...attrs, key: i }))); }; 
+
+async function generateContent(apiKey, model, prompt, base64Image, mimeType) { 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`; 
+  let parts = []; 
+  if (base64Image && mimeType) { 
+    parts.push({ inline_data: { mime_type: mimeType, data: base64Image } }); 
+  } 
+  parts.push({ text: prompt }); 
+  
+  const body = { 
+    contents: [{ parts: parts }], 
+    generationConfig: { responseMimeType: 'application/json' },
+    tools: [{ google_search_retrieval: {} }] // Enable Google Search Grounding
+  };
+
+  const response = await fetch(url, { 
+    method: 'POST', 
+    headers: { 'Content-Type': 'application/json' }, 
+    body: JSON.stringify(body) 
+  }); 
+
+  if (!response.ok) { 
+    const err = await response.json(); 
+    throw new Error(err.error?.message || 'Lỗi kết nối Gemini API'); 
+  } 
+  const data = await response.json(); 
+  return data.candidates[0].content.parts[0].text; 
+}
 const formatVNĐ = (val) => {
 return val.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") + ' VNĐ';
 };
@@ -65,6 +93,7 @@ const [scanMimeType, setScanMimeType] = useState(null);
 const [showTrapModal, setShowTrapModal] = useState(false);
 const [flashMessage, setFlashMessage] = useState(null);
 const [lastUpdate, setLastUpdate] = useState('');
+const [manualStake, setManualStake] = useState(0);
 const [currentMatch, setCurrentMatch] = useState({
 name: '',
 recommendedBet: '',
@@ -184,9 +213,13 @@ let kellyFraction = b > 0 ? (b * p - q) / b : 0;
 const adjustedKelly = Math.max(0, kellyFraction);
 const multiplier = strategy === '1/4' ? 0.25 : 0.125;
 const stake = bankroll * adjustedKelly * multiplier;
+const finalStake = Math.floor(stake);
+if (manualStake === 0 || manualStake === undefined) {
+  setManualStake(finalStake);
+}
 return {
 ev: ev * 100,
-stake: ev > 0 ? Math.floor(stake) : 0,
+stake: ev > 0 ? finalStake : 0,
 riskLevel: ev > 0.1 ? 'THẤP' : ev > 0.05 ? 'TRUNG BÌNH' : 'CAO'
 };
 }, [currentMatch, bankroll, strategy]);
@@ -232,8 +265,9 @@ throw new Error("Thiếu API Key Gemini. Vui lòng kiểm tra cài đặt.");
 }
 const prompt = `Bạn là một Chuyên gia Phân tích Dữ liệu Cá cược (Quant Betting Analyst) chuyên nghiệp, chuyên "đọc vị" các sàn lớn như 8xbet.
 Nhiệm vụ: Phân tích ảnh chụp màn hình giao diện 8xbet (Tennis, Bóng rổ NBA, Bóng đá) và đưa ra kèo đánh CHI TIẾT nhất.
+SỬ DỤNG GOOGLE SEARCH: Bạn PHẢI tìm kiếm thông tin thời gian thực về trận đấu này trên internet (phong độ, chấn thương, tin tức mới nhất, biến động odds sàn quốc tế). KHÔNG ĐƯỢC BỊA ĐẶT. Dữ liệu phải chính xác 100% từ các nguồn uy tín.
 1. Nhận diện: Tên trận đấu, Giải đấu, Tỷ lệ Odds hiện tại, Các loại kèo đang mở (Handicap, Over/Under, 1x2).
-2. Phân tích: Dựa trên dữ liệu thời gian thực (nếu có) và kiến thức chuyên sâu để tìm ra Value Edge.
+2. Phân tích: Kết hợp dữ liệu từ ảnh và dữ liệu thời gian thực từ internet để tìm ra Value Edge.
 3. Đọc vị: Phát hiện kèo dụ (Trap) dựa trên biến động Odds và dòng tiền.
 Trả về JSON:
 {
@@ -246,7 +280,7 @@ Trả về JSON:
 "verdict": "VALUE" | "TRAP" | "PASS",
 "confidence": 0-100,
 "analysis": {
-"tactical": "Phân tích chiến thuật/phong độ/chấn thương",
+"tactical": "Phân tích chiến thuật/phong độ/chấn thương dựa trên tin tức internet mới nhất",
 "moneyFlow": "Dòng tiền Smart Money đang đi đâu",
 "bookieIntent": "Ý đồ nhà cái (Dụ cửa nào?)",
 "betLogic": "Tại sao lại chọn kèo này thay vì các kèo khác trong ảnh?"
@@ -310,7 +344,7 @@ match: currentMatch.name,
 recommendedBet: currentMatch.recommendedBet,
 odds: currentMatch.bookieOdds,
 prob: currentMatch.aiProb,
-stake: calculations.stake,
+stake: manualStake,
 status: 'pending',
 date: new Date().toLocaleString('vi-VN'),
 ev: calculations.ev
@@ -320,6 +354,7 @@ setStep(1);
 setScanPreview(null);
 setScanBase64(null);
 setScanMimeType(null);
+setManualStake(0);
 setCurrentMatch({
 name: '', recommendedBet: '', bookieOdds: 2.0, aiProb: 50, impliedProb: 50, edge: 0,
 verdict: 'PASS', confidence: 0,
@@ -608,10 +643,19 @@ className="space-y-8"
 >
 <div className="grid grid-cols-1 gap-4 sm:gap-6">
 <div className="p-6 sm:p-10 border-4 border-emerald-500 rounded-[2rem] sm:rounded-[3rem] bg-emerald-500/5 text-center">
-<p className="text-[10px] sm:text-sm font-black text-emerald-500 uppercase tracking-[0.4em] mb-2 sm:mb-4">SỐ TIỀN NÊN ĐÁNH</p>
-<h3 className="text-3xl sm:text-7xl font-mono font-black text-emerald-500">
-{formatVNĐ(calculations.stake)}
-</h3>
+<p className="text-[10px] sm:text-sm font-black text-emerald-500 uppercase tracking-[0.4em] mb-2 sm:mb-4">SỐ TIỀN NÊN ĐÁNH (CÓ THỂ CHỈNH SỬA)</p>
+<div className="flex items-center justify-center gap-4">
+  <input
+    type="text"
+    value={manualStake.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")}
+    onChange={(e) => {
+      const rawValue = e.target.value.replace(/\./g, "");
+      if (!isNaN(rawValue)) setManualStake(Number(rawValue));
+    }}
+    className="bg-transparent text-3xl sm:text-7xl font-mono font-black text-emerald-500 text-center border-b-4 border-emerald-500/30 focus:border-emerald-500 outline-none w-full max-w-md"
+  />
+  <span className="text-2xl sm:text-5xl font-black text-emerald-500">VNĐ</span>
+</div>
 </div>
 <div className="grid grid-cols-2 gap-4 sm:gap-6">
 <div className="p-4 sm:p-8 border-4 border-white rounded-[1.5rem] sm:rounded-[2rem] bg-white/5 text-center">
@@ -892,6 +936,8 @@ className="w-full bg-black border-2 border-white/20 rounded-xl px-4 py-3 font-bo
 <option value="gemini-3-flash-preview">Gemini 3 Flash (Nhanh)</option>
 <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Chính xác)</option>
 <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Lite (Tiết kiệm)</option>
+<option value="gemma-2-27b-it">Gemma 2 27B (Mạnh mẽ)</option>
+<option value="gemma-2-9b-it">Gemma 2 9B (Linh hoạt)</option>
 </select>
 </div>
 <div className="space-y-4">
