@@ -22,82 +22,27 @@ body { background-color: #000000; color: #ffffff; margin: 0; padding: 0; font-fa
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useMemo, useEffect } = React; const { motion, AnimatePresence } = window.Motion; const Icon = ({ name, className }) => { const iconDef = window.lucide[name]; if (!iconDef) return null; return React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '24', height: '24', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round', className: className }, iconDef.map(([tag, attrs], i) => React.createElement(tag, { ...attrs, key: i }))); }; async function generateContent(apiKey, model, prompt, base64Image, mimeType) { const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`; let parts = []; if (base64Image && mimeType) { parts.push({ inline_data: { mime_type: mimeType, data: base64Image } }); } parts.push({ text: prompt }); const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: 'application/json' } }) }); if (!response.ok) { const err = await response.json(); throw new Error(err.error?.message || 'Lỗi kết nối Gemini API'); } const data = await response.json(); return data.candidates[0].content.parts[0].text; }
-import { 
-Brain, 
-Camera, 
-Scan, 
-TrendingUp, 
-AlertTriangle, 
-CheckCircle2, 
-History, 
-Settings, 
-ChevronRight, 
-X, 
-Check, 
-Minus,
-Trash2,
-RefreshCw,
-Info,
-Terminal,
-Flame,
-ShieldAlert,
-Zap,
-Cpu,
-Key,
-Scale,
-Eye,
-Activity,
-Target,
-Crosshair
-} from 'lucide-react';
-type Step = 1 | 2 | 3 | 4;
-interface Bet {
-id: string;
-match: string;
-odds: number;
-prob: number;
-stake: number;
-status: 'pending' | 'won' | 'lost' | 'void';
-date: string;
-ev: number;
-}
-type RiskStrategy = '1/4' | '1/8';
-interface MatchAnalysis {
-name: string;
-bookieOdds: number;
-aiProb: number;
-impliedProb: number;
-edge: number;
-verdict: 'VALUE' | 'TRAP' | 'PASS';
-confidence: number;
-analysis: {
-tactical: string;
-moneyFlow: string;
-bookieIntent: string;
-};
-h2h: { win: number; draw: number; loss: number };
-}
-const formatVNĐ = (val: number) => {
+const formatVNĐ = (val) => {
 return val.toLocaleString('vi-VN') + ' VNĐ';
 };
 function App() {
-const [step, setStep] = useState<Step>(1);
-const [bankroll, setBankroll] = useState<number>(10000000);
-const [ledger, setLedger] = useState<Bet[]>([]);
-const [strategy, setStrategy] = useState<RiskStrategy>('1/4');
+const [step, setStep] = useState(1);
+const [bankroll, setBankroll] = useState(10000000);
+const [ledger, setLedger] = useState([]);
+const [strategy, setStrategy] = useState('1/4');
 const [showSettings, setShowSettings] = useState(false);
-const [selectedModel, setSelectedModel] = useState<string>('gemini-3-flash-preview');
-const [customApiKey, setCustomApiKey] = useState<string>('');
+const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
+const [customApiKey, setCustomApiKey] = useState('');
 const [isScanning, setIsScanning] = useState(false);
 const [isResearching, setIsResearching] = useState(false);
-const [terminalLogs, setTerminalLogs] = useState<string[]>([]);
-const [scanPreview, setScanPreview] = useState<string | null>(null);
-const [scanBase64, setScanBase64] = useState<string | null>(null);
-const [scanMimeType, setScanMimeType] = useState<string | null>(null);
+const [terminalLogs, setTerminalLogs] = useState([]);
+const [scanPreview, setScanPreview] = useState(null);
+const [scanBase64, setScanBase64] = useState(null);
+const [scanMimeType, setScanMimeType] = useState(null);
 const [showTrapModal, setShowTrapModal] = useState(false);
-const [flashMessage, setFlashMessage] = useState<string | null>(null);
-const [lastUpdate, setLastUpdate] = useState<string>('');
-const [currentMatch, setCurrentMatch] = useState<MatchAnalysis>({
+const [flashMessage, setFlashMessage] = useState(null);
+const [lastUpdate, setLastUpdate] = useState('');
+const [currentMatch, setCurrentMatch] = useState({
 name: '',
 bookieOdds: 2.0,
 aiProb: 50,
@@ -143,14 +88,14 @@ const isTilting = useMemo(() => {
 const lastThree = ledger.slice(0, 3);
 return lastThree.length === 3 && lastThree.every(b => b.status === 'lost');
 }, [ledger]);
-const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+const handleFileSelect = (e) => {
 const file = e.target.files?.[0];
 if (!file) return;
 setScanPreview(URL.createObjectURL(file));
 setScanMimeType(file.type);
 const reader = new FileReader();
 reader.onloadend = () => {
-const base64String = (reader.result as string).split(',')[1];
+const base64String = reader.result.split(',')[1];
 setScanBase64(base64String);
 };
 reader.readAsDataURL(file);
@@ -162,7 +107,7 @@ setIsScanning(false);
 setIsResearching(true);
 setTerminalLogs([]);
 setLastUpdate(new Date().toLocaleTimeString('vi-VN'));
-const addLog = (msg: string, delay: number) => {
+const addLog = (msg, delay) => {
 return new Promise((resolve) => {
 setTimeout(() => {
 setTerminalLogs(prev => [...prev, msg]);
@@ -176,13 +121,6 @@ await addLog("> Phân tích biến động Odds & Smart Money...", 500);
 await addLog("> Đang gửi yêu cầu tới AI phân tích...", 500);
 try {
 let apiKeyToUse = customApiKey;
-if (!apiKeyToUse) {
-try {
-apiKeyToUse = process.env.GEMINI_API_KEY || '';
-} catch (e) {
-apiKeyToUse = '';
-}
-}
 if (!apiKeyToUse) {
 throw new Error("Thiếu API Key Gemini. Vui lòng kiểm tra cài đặt.");
 }
@@ -208,9 +146,9 @@ Trả về JSON với cấu trúc:
 Lưu ý: Văn phong cực kỳ chuyên nghiệp, sắc bén, sử dụng thuật ngữ betting (Odds, Line, Trap, Value, Smart Money).`;
 const rawText = await generateContent(apiKeyToUse, selectedModel, prompt, scanBase64, scanMimeType); const response = { text: rawText };
 await addLog("> Đã nhận phản hồi từ AI. Đang xử lý dữ liệu...", 200);
-let rawText = response.text || '{}';
-rawText = rawText.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
-const result = JSON.parse(rawText);
+let responseText = response.text || '{}';
+responseText = responseText.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+const result = JSON.parse(responseText);
 setCurrentMatch({
 name: result.name || "Trận đấu chưa xác định",
 bookieOdds: result.bookieOdds || 2.0,
@@ -254,7 +192,7 @@ setStep(2);
 }, 1500);
 };
 const confirmBet = () => {
-const newBet: Bet = {
+const newBet = {
 id: Math.random().toString(36).substr(2, 9),
 match: currentMatch.name,
 odds: currentMatch.bookieOdds,
@@ -269,14 +207,14 @@ setStep(1);
 setScanPreview(null);
 setScanBase64(null);
 setScanMimeType(null);
-setCurrentMatch({ 
-name: '', bookieOdds: 2.0, aiProb: 50, impliedProb: 50, edge: 0, 
-verdict: 'PASS', confidence: 0, 
-analysis: { tactical: '', moneyFlow: '', bookieIntent: '' }, 
-h2h: { win: 0, draw: 0, loss: 0 } 
+setCurrentMatch({
+name: '', bookieOdds: 2.0, aiProb: 50, impliedProb: 50, edge: 0,
+verdict: 'PASS', confidence: 0,
+analysis: { tactical: '', moneyFlow: '', bookieIntent: '' },
+h2h: { win: 0, draw: 0, loss: 0 }
 });
 };
-const updateBetStatus = (id: string, status: Bet['status']) => {
+const updateBetStatus = (id, status) => {
 setLedger(prev => prev.map(bet => {
 if (bet.id === id && bet.status === 'pending') {
 let profit = 0;
@@ -297,7 +235,6 @@ return bet;
 };
 return (
 <div className="min-h-screen bg-black text-white font-sans selection:bg-emerald-500/30 p-4 sm:p-6">
-{}
 <header className="max-w-4xl mx-auto mb-8 sm:mb-12">
 <div className="flex justify-between items-center mb-6 sm:mb-8">
 <div className="flex items-center gap-3 sm:gap-4">
@@ -306,17 +243,16 @@ return (
 </div>
 <h1 className="text-xl sm:text-3xl font-black tracking-tighter uppercase italic">QuantBet <span className="text-emerald-500">AI</span></h1>
 </div>
-<button 
+<button
 onClick={() => setShowSettings(true)}
 className="p-3 sm:p-4 border-2 border-white rounded-2xl hover:bg-white hover:text-black transition-all active:scale-95"
 >
 <Icon name="Settings" className="w-5 h-5 sm:w-6 sm:h-6" />
 </button>
 </div>
-{}
 <div className="flex gap-1.5 sm:gap-2">
 {[1, 2, 3, 4].map((s) => (
-<div 
+<div
 key={s}
 className={`h-2 sm:h-3 flex-1 rounded-full transition-all duration-500 ${
 step >= s ? 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.5)]' : 'bg-white/10'
@@ -333,9 +269,8 @@ step >= s ? 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.5)]' : 'bg-white/
 </header>
 <main className="max-w-4xl mx-auto">
 <AnimatePresence mode="wait">
-{}
 {step === 1 && (
-<motion.div 
+<motion.div
 key="step1"
 initial={{ opacity: 0, scale: 0.9 }}
 animate={{ opacity: 1, scale: 1 }}
@@ -343,11 +278,77 @@ exit={{ opacity: 0, scale: 1.1 }}
 className="space-y-8"
 >
 <div className="relative group">
-<input 
-type="file" 
-accept="image}
+<input
+type="file"
+accept="image/*"
+onChange={handleFileSelect}
+className="hidden"
+id="slip-upload"
+/>
+<label
+htmlFor="slip-upload"
+className={`
+flex flex-col items-center justify-center w-full aspect-video rounded-[2rem] border-4 border-dashed transition-all cursor-pointer overflow-hidden relative
+${scanPreview ? 'border-emerald-500 bg-emerald-500/5' : 'border-white/20 bg-white/5 hover:border-white hover:bg-white/10'}
+`}
+>
+{scanPreview ? (
+<div className="relative w-full h-full">
+<img src={scanPreview} alt="Preview" className="w-full h-full object-contain" />
+{(isScanning || isResearching) && (
+<div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-xl">
+<motion.div
+animate={{ scale: [1, 1.2, 1], rotate: 360 }}
+transition={{ repeat: Infinity, duration: 2 }}
+className="w-20 h-20 sm:w-32 sm:h-32 rounded-full border-4 border-emerald-500 flex items-center justify-center"
+>
+<Icon name="RefreshCw" className="w-10 h-10 sm:w-16 sm:h-16 text-emerald-500" />
+</motion.div>
+{isScanning ? (
+<p className="mt-6 sm:mt-8 text-lg sm:text-2xl font-black uppercase tracking-widest text-emerald-500 animate-pulse">🧠 AI ĐANG QUÉT VÉ...</p>
+) : (
+<div className="mt-6 sm:mt-8 w-full max-md px-6 space-y-1 sm:space-y-2">
+<div className="flex items-center gap-2 text-emerald-400 mb-2 sm:mb-4">
+<Icon name="Terminal" className="w-4 h-4 sm:w-5 sm:h-5" />
+<span className="text-[8px] sm:text-xs font-mono font-bold uppercase tracking-widest">Terminal Output</span>
+</div>
+{terminalLogs.map((log, i) => (
+<motion.p
+key={i}
+initial={{ opacity: 0, x: -10 }}
+animate={{ opacity: 1, x: 0 }}
+className="text-xs sm:text-sm font-mono text-emerald-400/80"
+>
+{log}
+</motion.p>
+))}
+</div>
+)}
+</div>
+)}
+</div>
+) : (
+<div className="flex flex-col items-center gap-4 sm:gap-6">
+<div className="p-6 sm:p-8 bg-white rounded-full">
+<Icon name="Camera" className="w-10 h-10 sm:w-16 sm:h-16 text-black" />
+</div>
+<p className="text-xl sm:text-3xl font-black uppercase tracking-tighter">Bấm để Chụp/Tải Ảnh</p>
+</div>
+)}
+</label>
+</div>
+{scanPreview && !isScanning && !isResearching && (
+<button
+onClick={startAnalysis}
+className="w-full py-5 sm:py-8 bg-white text-black rounded-[1.5rem] sm:rounded-[2rem] text-xl sm:text-3xl font-black uppercase tracking-tighter flex items-center justify-center gap-3 sm:gap-4 hover:bg-emerald-500 transition-all active:scale-95 shadow-[0_20px_50px_rgba(255,255,255,0.1)]"
+>
+TIẾN HÀNH PHÂN TÍCH <Icon name="ChevronRight" className="w-6 h-6 sm:w-10 sm:h-10" />
+</button>
+)}
+</motion.div>
+)}
 {step === 2 && (
-<motion.div 
+<motion.div
 key="step2"
 initial={{ opacity: 0, x: 100 }}
 animate={{ opacity: 1, x: 0 }}
@@ -368,18 +369,17 @@ currentMatch.verdict === 'VALUE' ? 'border-emerald-500 bg-emerald-500/10 text-em
 currentMatch.verdict === 'TRAP' ? 'border-rose-500 bg-rose-500/10 text-rose-500' :
 'border-white/40 bg-white/5 text-white/60'
 }`}>
-{currentMatch.verdict === 'VALUE' ? <Icon name="Target" className="w-5 h-5" /> : 
-currentMatch.verdict === 'TRAP' ? <Icon name="ShieldAlert" className="w-5 h-5" /> : 
+{currentMatch.verdict === 'VALUE' ? <Icon name="Target" className="w-5 h-5" /> :
+currentMatch.verdict === 'TRAP' ? <Icon name="ShieldAlert" className="w-5 h-5" /> :
 <Icon name="Minus" className="w-5 h-5" />}
 <span className="font-black uppercase tracking-widest">
-{currentMatch.verdict === 'VALUE' ? 'KÈO THƠM' : 
+{currentMatch.verdict === 'VALUE' ? 'KÈO THƠM' :
 currentMatch.verdict === 'TRAP' ? 'KÈO DỤ' : 'BỎ QUA'}
 </span>
 </div>
 </div>
 </div>
 <div className="grid grid-cols-1 gap-4 sm:gap-6">
-{}
 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
 <div className="p-4 sm:p-6 border-2 border-white/20 rounded-[1.5rem] bg-white/5 flex flex-col justify-between">
 <p className="text-[10px] font-black text-white/40 uppercase tracking-widest mb-2">ODDS NHÀ CÁI</p>
@@ -406,7 +406,6 @@ currentMatch.edge > 0 ? 'text-emerald-500' : 'text-rose-500'
 </p>
 </div>
 </div>
-{}
 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
 <div className="p-5 sm:p-6 border-2 border-white/10 rounded-[1.5rem] bg-white/5">
 <div className="flex items-center gap-2 mb-3">
@@ -430,7 +429,6 @@ currentMatch.edge > 0 ? 'text-emerald-500' : 'text-rose-500'
 <p className="text-sm sm:text-base text-yellow-100/90 leading-relaxed italic">"{currentMatch.analysis.bookieIntent}"</p>
 </div>
 </div>
-{}
 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
 <div className="p-5 sm:p-6 border-2 border-white/10 rounded-[1.5rem] bg-white/5">
 <p className="text-[10px] sm:text-xs font-black text-white/40 uppercase tracking-[0.3em] mb-3 sm:mb-4">LỊCH SỬ ĐỐI ĐẦU (H2H)</p>
@@ -455,7 +453,7 @@ currentMatch.edge > 0 ? 'text-emerald-500' : 'text-rose-500'
 <span className="text-xl font-mono font-black text-white">{currentMatch.confidence}%</span>
 </div>
 <div className="h-3 w-full bg-white/10 rounded-full overflow-hidden">
-<motion.div 
+<motion.div
 initial={{ width: 0 }}
 animate={{ width: `${currentMatch.confidence}%` }}
 className="h-full bg-white"
@@ -464,7 +462,7 @@ className="h-full bg-white"
 </div>
 </div>
 </div>
-<button 
+<button
 onClick={() => setStep(3)}
 className="w-full py-5 sm:py-8 bg-white text-black rounded-[1.5rem] sm:rounded-[2rem] text-xl sm:text-3xl font-black uppercase tracking-tighter flex items-center justify-center gap-3 sm:gap-4 hover:bg-emerald-500 transition-all active:scale-95"
 >
@@ -472,9 +470,8 @@ XEM CHIẾN THUẬT VỐN <Icon name="ChevronRight" className="w-6 h-6 sm:w-10 s
 </button>
 </motion.div>
 )}
-{}
 {step === 3 && (
-<motion.div 
+<motion.div
 key="step3"
 initial={{ opacity: 0, x: 100 }}
 animate={{ opacity: 1, x: 0 }}
@@ -496,7 +493,7 @@ className="space-y-8"
 <div className="p-4 sm:p-8 border-4 border-white rounded-[1.5rem] sm:rounded-[2rem] bg-white/5 text-center">
 <p className="text-[8px] sm:text-xs font-black text-white/40 uppercase tracking-widest mb-1 sm:mb-2">RỦI RO</p>
 <h3 className={`text-2xl sm:text-4xl font-black ${
-calculations.riskLevel === 'THẤP' ? 'text-emerald-500' : 
+calculations.riskLevel === 'THẤP' ? 'text-emerald-500' :
 calculations.riskLevel === 'TRUNG BÌNH' ? 'text-yellow-500' : 'text-rose-500'
 }`}>
 {calculations.riskLevel}
@@ -509,7 +506,7 @@ calculations.riskLevel === 'TRUNG BÌNH' ? 'text-yellow-500' : 'text-rose-500'
 <span className="text-xl sm:text-2xl font-mono font-black text-emerald-500">{strategy} Kelly</span>
 </div>
 <div className="flex gap-3 sm:gap-4">
-<button 
+<button
 onClick={() => setStrategy('1/8')}
 className={`flex-1 py-4 sm:py-6 rounded-2xl border-4 font-black text-lg sm:text-xl transition-all ${
 strategy === '1/8' ? 'bg-white text-black border-white' : 'border-white/20 text-white/40 hover:border-white'
@@ -517,7 +514,7 @@ strategy === '1/8' ? 'bg-white text-black border-white' : 'border-white/20 text-
 >
 AN TOÀN (1/8)
 </button>
-<button 
+<button
 onClick={() => setStrategy('1/4')}
 className={`flex-1 py-4 sm:py-6 rounded-2xl border-4 font-black text-lg sm:text-xl transition-all ${
 strategy === '1/4' ? 'bg-white text-black border-white' : 'border-white/20 text-white/40 hover:border-white'
@@ -528,7 +525,7 @@ CHUẨN (1/4)
 </div>
 </div>
 </div>
-<button 
+<button
 onClick={() => setStep(4)}
 className="w-full py-5 sm:py-8 bg-white text-black rounded-[1.5rem] sm:rounded-[2rem] text-xl sm:text-3xl font-black uppercase tracking-tighter flex items-center justify-center gap-3 sm:gap-4 hover:bg-emerald-500 transition-all active:scale-95"
 >
@@ -536,16 +533,15 @@ XÁC NHẬN KÈO <Icon name="ChevronRight" className="w-6 h-6 sm:w-10 sm:h-10" /
 </button>
 </motion.div>
 )}
-{}
 {step === 4 && (
-<motion.div 
+<motion.div
 key="step4"
 initial={{ opacity: 0, scale: 0.5 }}
 animate={{ opacity: 1, scale: 1 }}
 exit={{ opacity: 0, scale: 1.5 }}
 className="flex flex-col items-center justify-center min-h-[60vh] text-center"
 >
-<motion.div 
+<motion.div
 initial={{ scale: 0 }}
 animate={{ scale: 1 }}
 transition={{ type: "spring", damping: 12 }}
@@ -555,7 +551,7 @@ className="w-32 h-32 sm:w-48 sm:h-48 bg-emerald-500 rounded-full flex items-cent
 </motion.div>
 <h2 className="text-4xl sm:text-6xl font-black tracking-tighter uppercase mb-4 sm:mb-6">SẴN SÀNG!</h2>
 <p className="text-lg sm:text-xl text-white/60 mb-8 sm:mb-12 font-bold">Mọi thông số đã được tối ưu hóa bởi AI.</p>
-<button 
+<button
 onClick={confirmBet}
 className="w-full py-6 sm:py-12 bg-emerald-500 text-black rounded-[2rem] sm:rounded-[3rem] text-2xl sm:text-5xl font-black uppercase tracking-tighter hover:bg-emerald-400 transition-all active:scale-95 shadow-[0_30px_60px_rgba(16,185,129,0.3)]"
 >
@@ -564,7 +560,6 @@ CHỐT LỆNH & LƯU VÉ
 </motion.div>
 )}
 </AnimatePresence>
-{}
 <section className="mt-16 sm:mt-24 space-y-6 sm:space-y-8">
 <div className="flex items-center justify-between border-b-4 border-white pb-3 sm:pb-4">
 <div className="flex items-center gap-3 sm:gap-4">
@@ -576,7 +571,7 @@ CHỐT LỆNH & LƯU VÉ
 </div>
 </div>
 {isTilting && (
-<motion.div 
+<motion.div
 initial={{ x: -10, opacity: 0 }}
 animate={{ x: [0, -10, 10, -10, 10, 0], opacity: 1 }}
 className="p-5 sm:p-8 bg-rose-500 text-black rounded-[1.5rem] sm:rounded-[2rem] flex items-center gap-4 sm:gap-6 border-4 border-white"
@@ -590,7 +585,7 @@ CẢNH BÁO: BẠN ĐANG CÓ DẤU HIỆU CAY CÚ. HÃY NGHỈ NGƠI 30 PHÚT.
 <div className="grid grid-cols-1 gap-4 sm:gap-6">
 {ledger.length > 0 ? (
 ledger.map((bet) => (
-<motion.div 
+<motion.div
 key={bet.id}
 layout
 initial={{ opacity: 0, y: 20 }}
@@ -628,19 +623,19 @@ bet.status === 'lost' ? 'border-rose-500 text-rose-500' : 'border-white/40 text-
 </div>
 {bet.status === 'pending' && (
 <div className="grid grid-cols-3 gap-3 sm:gap-4">
-<button 
+<button
 onClick={() => updateBetStatus(bet.id, 'won')}
 className="py-4 sm:py-6 bg-emerald-500 text-black rounded-2xl font-black text-base sm:text-xl uppercase hover:bg-emerald-400 transition-all active:scale-95"
 >
 ✅ HÚP
 </button>
-<button 
+<button
 onClick={() => updateBetStatus(bet.id, 'lost')}
 className="py-4 sm:py-6 bg-rose-500 text-black rounded-2xl font-black text-base sm:text-xl uppercase hover:bg-rose-400 transition-all active:scale-95"
 >
 ❌ GÃY
 </button>
-<button 
+<button
 onClick={() => updateBetStatus(bet.id, 'void')}
 className="py-4 sm:py-6 bg-white text-black rounded-2xl font-black text-base sm:text-xl uppercase hover:bg-white/80 transition-all active:scale-95"
 >
@@ -658,16 +653,15 @@ className="py-4 sm:py-6 bg-white text-black rounded-2xl font-black text-base sm:
 </div>
 </section>
 </main>
-{}
 <AnimatePresence>
 {showTrapModal && (
-<motion.div 
+<motion.div
 initial={{ opacity: 0 }}
 animate={{ opacity: 1 }}
 exit={{ opacity: 0 }}
 className="fixed inset-0 z-[200] bg-rose-600 flex items-center justify-center p-6"
 >
-<motion.div 
+<motion.div
 initial={{ scale: 0.8, rotate: -5 }}
 animate={{ scale: 1, rotate: 0 }}
 className="max-w-2xl text-center space-y-12"
@@ -678,18 +672,18 @@ className="max-w-2xl text-center space-y-12"
 <div className="space-y-4">
 <h2 className="text-6xl font-black uppercase tracking-tighter text-white">⚠️ CẢNH BÁO BẪY (TRAP DETECTED!)</h2>
 <p className="text-2xl font-bold text-white/90 leading-tight">
-Phát hiện biến động Odds bất thường. Nhà cái đang 'dụ' người dùng vào cửa này. 
+Phát hiện biến động Odds bất thường. Nhà cái đang 'dụ' người dùng vào cửa này.
 AI khuyến nghị: <span className="underline">NÉ NGAY HOẶC GIẢM VỐN XUỐNG 1/10.</span>
 </p>
 </div>
 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-<button 
+<button
 onClick={() => setShowTrapModal(false)}
 className="py-8 bg-white/20 text-white rounded-[2rem] text-2xl font-black uppercase tracking-tighter hover:bg-white/30 transition-all"
 >
 TÔI ĐÃ HIỂU, VẪN TIẾP TỤC
 </button>
-<button 
+<button
 onClick={() => {
 setShowTrapModal(false);
 setStep(1);
@@ -706,10 +700,9 @@ HỦY LỆNH ĐỂ AN TOÀN
 </motion.div>
 )}
 </AnimatePresence>
-{}
 <AnimatePresence>
 {flashMessage && (
-<motion.div 
+<motion.div
 initial={{ opacity: 0, y: 50 }}
 animate={{ opacity: 1, y: 0 }}
 exit={{ opacity: 0, y: 50 }}
@@ -719,21 +712,20 @@ className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[150] bg-white text-black
 </motion.div>
 )}
 </AnimatePresence>
-{}
 <AnimatePresence>
 {showSettings && (
-<motion.div 
+<motion.div
 initial={{ opacity: 0 }}
 animate={{ opacity: 1 }}
 exit={{ opacity: 0 }}
 className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl flex items-center justify-center p-6"
 >
-<motion.div 
+<motion.div
 initial={{ scale: 0.9, y: 20 }}
 animate={{ scale: 1, y: 0 }}
 className="w-full max-w-lg bg-black border-4 border-white rounded-[3rem] p-10 relative"
 >
-<button 
+<button
 onClick={() => setShowSettings(false)}
 className="absolute top-6 right-6 p-4 hover:bg-white/10 rounded-full transition-all"
 >
@@ -744,7 +736,6 @@ className="absolute top-6 right-6 p-4 hover:bg-white/10 rounded-full transition-
 <p className="text-white/40 font-bold">Cấu hình AI và quản trị vốn của bạn.</p>
 </div>
 <div className="space-y-8 max-h-[60vh] overflow-y-auto pr-4 custom-scrollbar">
-{}
 <div className="space-y-6 p-6 border-2 border-white/10 rounded-2xl bg-white/5">
 <div className="flex items-center gap-3 text-emerald-500">
 <Icon name="Cpu" className="w-6 h-6" />
@@ -752,7 +743,7 @@ className="absolute top-6 right-6 p-4 hover:bg-white/10 rounded-full transition-
 </div>
 <div className="space-y-4">
 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Lựa chọn Model</label>
-<select 
+<select
 value={selectedModel}
 onChange={(e) => setSelectedModel(e.target.value)}
 className="w-full bg-black border-2 border-white/20 rounded-xl px-4 py-3 font-bold focus:border-emerald-500 outline-none"
@@ -771,8 +762,8 @@ className="w-full bg-black border-2 border-white/20 rounded-xl px-4 py-3 font-bo
 </div>
 <div className="relative">
 <Icon name="Key" className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/20" />
-<input 
-type="password" 
+<input
+type="password"
 value={customApiKey}
 onChange={(e) => setCustomApiKey(e.target.value)}
 placeholder="AIzaSy..."
@@ -783,14 +774,14 @@ className="w-full bg-black border-2 border-white/20 rounded-xl pl-12 pr-4 py-3 f
 </div>
 <div className="space-y-4">
 <label className="text-xs font-black uppercase tracking-[0.3em] text-white/60">VỐN GỐC (VNĐ)</label>
-<input 
-type="number" 
+<input
+type="number"
 value={bankroll}
 onChange={(e) => setBankroll(Number(e.target.value))}
 className="w-full bg-white/5 border-4 border-white rounded-2xl px-8 py-6 text-4xl font-mono font-black focus:outline-none focus:border-emerald-500 transition-all"
 />
 </div>
-<button 
+<button
 onClick={() => {
 if (window.confirm("XÓA TOÀN BỘ LỊCH SỬ?")) {
 setLedger([]);
@@ -801,7 +792,7 @@ className="w-full py-6 border-4 border-rose-500 text-rose-500 rounded-2xl font-b
 >
 <Icon name="Trash2" className="w-6 h-6" /> XÓA DỮ LIỆU
 </button>
-<button 
+<button
 onClick={() => setShowSettings(false)}
 className="w-full py-8 bg-white text-black rounded-[2rem] text-2xl font-black uppercase tracking-tighter hover:bg-emerald-500 transition-all"
 >
@@ -812,7 +803,6 @@ LƯU THAY ĐỔI
 </motion.div>
 )}
 </AnimatePresence>
-{}
 <footer className="max-w-4xl mx-auto mt-20 pt-10 border-t-4 border-white/10 flex flex-col sm:flex-row justify-between items-center gap-6 opacity-40">
 <div className="flex items-center gap-3">
 <Icon name="Info" className="w-5 h-5" />
