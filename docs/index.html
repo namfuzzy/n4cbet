@@ -221,6 +221,12 @@ const [isVerifying, setIsVerifying] = useState(false);
 const [verificationStatus, setVerificationStatus] = useState(null); // { success: bool, message: string }
 const [lastUpdate, setLastUpdate] = useState('');
 const [manualStake, setManualStake] = useState(0);
+const [showVerifyModal, setShowVerifyModal] = useState(false);
+const [isAnalyzingTicket, setIsAnalyzingTicket] = useState(false);
+const [analyzedTicket, setAnalyzedTicket] = useState(null);
+const [verifyPreview, setVerifyPreview] = useState(null);
+const [verifyBase64, setVerifyBase64] = useState(null);
+const [verifyMimeType, setVerifyMimeType] = useState(null);
 const [currentMatch, setCurrentMatch] = useState({
   name: '',
   recommendedBet: '',
@@ -610,23 +616,100 @@ setCurrentMatch({
 });
 };
 const updateBetStatus = (id, status) => {
-setLedger(prev => prev.map(bet => {
-if (bet.id === id && bet.status === 'pending') {
-let profit = 0;
-if (status === 'won') {
-profit = bet.stake * (bet.odds - 1);
-setFlashMessage("Húp mạnh! Chốt lời thành công! 💰");
-}
-if (status === 'lost') {
-profit = -bet.stake;
-setFlashMessage("Đã ghi nhận lệnh gãy. Bình tĩnh gỡ lại! 📉");
-}
-setBankroll(curr => curr + profit);
-setTimeout(() => setFlashMessage(null), 3000);
-return { ...bet, status };
-}
-return bet;
-}));
+  setLedger(prev => prev.map(bet => {
+    if (bet.id === id && bet.status === 'pending') {
+      let profit = 0;
+      if (status === 'won') {
+        profit = bet.stake * (bet.odds - 1);
+        setFlashMessage("Húp mạnh! Chốt lời thành công! 💰");
+      }
+      if (status === 'lost') {
+        profit = -bet.stake;
+        setFlashMessage("Đã ghi nhận lệnh gãy. Bình tĩnh gỡ lại! 📉");
+      }
+      setBankroll(curr => curr + profit);
+      setTimeout(() => setFlashMessage(null), 3000);
+      return { ...bet, status };
+    }
+    return bet;
+  }));
+};
+
+const handleVerifyFileSelect = (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  setVerifyPreview(URL.createObjectURL(file));
+  setVerifyMimeType(file.type);
+  const reader = new FileReader();
+  reader.onload = (ev) => setVerifyBase64(ev.target.result.split(',')[1]);
+  reader.readAsDataURL(file);
+};
+
+const handleVerifyTicketScan = async () => {
+  if (!verifyBase64) return;
+  setIsAnalyzingTicket(true);
+  try {
+    const apiKeyToUse = aiProvider === 'openrouter' ? openRouterApiKey : customApiKey;
+    const prompt = `Bạn là một chuyên gia kiểm soát vé cược. Hãy phân tích ảnh chụp màn hình vé cược này và trích xuất thông tin chính xác.
+    Yêu cầu trả về JSON:
+    {
+      "match": "Tên trận đấu (VD: Man City vs Arsenal)",
+      "bet": "Kèo đã đặt (VD: Man City -0.75)",
+      "odds": số odds (VD: 1.95),
+      "stake": số tiền cược (VD: 500000),
+      "status": "won" | "lost" | "void" | "pending"
+    }`;
+    const rawText = await generateContent(apiKeyToUse, selectedModel, prompt, verifyBase64, verifyMimeType, aiProvider);
+    let responseText = rawText.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+    const result = JSON.parse(responseText);
+    setAnalyzedTicket(result);
+  } catch (error) {
+    console.error("Ticket Analysis Error:", error);
+    setFlashMessage("Lỗi phân tích vé: " + error.message);
+  } finally {
+    setIsAnalyzingTicket(false);
+  }
+};
+
+const applyAnalyzedTicket = () => {
+  if (!analyzedTicket) return;
+  
+  const matchIndex = ledger.findIndex(b => 
+    b.status === 'pending' && 
+    (b.match.toLowerCase().includes(analyzedTicket.match.toLowerCase()) || 
+     analyzedTicket.match.toLowerCase().includes(b.match.toLowerCase()))
+  );
+
+  if (matchIndex !== -1) {
+    updateBetStatus(ledger[matchIndex].id, analyzedTicket.status);
+    setFlashMessage(`Đã cập nhật vé: ${analyzedTicket.match}`);
+  } else {
+    const newBet = {
+      id: Math.random().toString(36).substr(2, 9),
+      match: analyzedTicket.match,
+      recommendedBet: analyzedTicket.bet,
+      odds: analyzedTicket.odds,
+      prob: 0,
+      stake: analyzedTicket.stake,
+      status: analyzedTicket.status,
+      date: new Date().toLocaleString('vi-VN'),
+      ev: 0
+    };
+    
+    if (analyzedTicket.status === 'won') {
+      setBankroll(curr => curr + (analyzedTicket.stake * (analyzedTicket.odds - 1)));
+    } else if (analyzedTicket.status === 'lost') {
+      setBankroll(curr => curr - analyzedTicket.stake);
+    }
+    
+    setLedger([newBet, ...ledger]);
+    setFlashMessage("Đã thêm vé mới từ ảnh chụp!");
+  }
+  
+  setShowVerifyModal(false);
+  setAnalyzedTicket(null);
+  setVerifyPreview(null);
+  setVerifyBase64(null);
 };
 return (
 <div className="min-h-screen bg-black text-white font-sans selection:bg-emerald-500/30 p-4 sm:p-6">
@@ -1150,8 +1233,16 @@ CHỐT LỆNH & LƯU VÉ
 <Icon name="History" className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
 <h2 className="text-xl sm:text-3xl font-black uppercase tracking-tighter">VÉ ĐÃ LƯU</h2>
 </div>
+<div className="flex items-center gap-4">
+<button 
+  onClick={() => setShowVerifyModal(true)}
+  className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-black rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-emerald-400 transition-all"
+>
+  <Icon name="ShieldCheck" className="w-4 h-4" /> XÁC THỰC VÉ AI
+</button>
 <div className="text-lg sm:text-2xl font-mono font-black text-emerald-500">
 {formatVNĐ(bankroll)}
+</div>
 </div>
 </div>
 {isTilting && (
@@ -1297,6 +1388,120 @@ className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[150] bg-white text-black
 </motion.div>
 )}
 </AnimatePresence>
+
+<AnimatePresence>
+{showVerifyModal && (
+<motion.div
+  initial={{ opacity: 0 }}
+  animate={{ opacity: 1 }}
+  exit={{ opacity: 0 }}
+  className="fixed inset-0 z-[300] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-6"
+>
+  <div className="w-full max-w-2xl bg-black border-4 border-white rounded-[2.5rem] overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="p-6 border-b-4 border-white flex justify-between items-center bg-white/5">
+      <div className="flex items-center gap-3">
+        <Icon name="ShieldCheck" className="w-6 h-6 text-emerald-500" />
+        <h2 className="text-xl font-black uppercase tracking-tighter">XÁC THỰC VÉ CƯỢC AI</h2>
+      </div>
+      <button onClick={() => setShowVerifyModal(false)} className="p-2 hover:bg-white/10 rounded-full transition-all">
+        <Icon name="X" className="w-6 h-6" />
+      </button>
+    </div>
+
+    <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
+      {!analyzedTicket ? (
+        <div className="space-y-6">
+          <div className="p-8 border-4 border-dashed border-white/20 rounded-[2rem] text-center space-y-4">
+            {verifyPreview ? (
+              <div className="relative group">
+                <img src={verifyPreview} className="max-h-64 mx-auto rounded-xl border-2 border-white/20" />
+                <button 
+                  onClick={() => setVerifyPreview(null)}
+                  className="absolute top-2 right-2 p-2 bg-rose-500 rounded-full opacity-0 group-hover:opacity-100 transition-all"
+                >
+                  <Icon name="Trash2" className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <label className="block cursor-pointer py-12">
+                <Icon name="UploadCloud" className="w-16 h-16 mx-auto text-white/20 mb-4" />
+                <p className="text-sm font-black uppercase tracking-widest text-white/40">Tải lên ảnh chụp vé cược</p>
+                <input type="file" className="hidden" accept="image/*" onChange={handleVerifyFileSelect} />
+              </label>
+            )}
+          </div>
+
+          <button
+            onClick={handleVerifyTicketScan}
+            disabled={!verifyBase64 || isAnalyzingTicket}
+            className={`w-full py-6 rounded-2xl font-black text-xl uppercase tracking-tighter transition-all flex items-center justify-center gap-3 ${
+              !verifyBase64 || isAnalyzingTicket ? 'bg-white/5 text-white/20' : 'bg-emerald-500 text-black hover:bg-emerald-400'
+            }`}
+          >
+            {isAnalyzingTicket ? (
+              <>
+                <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}>
+                  <Icon name="Loader2" className="w-6 h-6" />
+                </motion.div>
+                ĐANG PHÂN TÍCH VÉ...
+              </>
+            ) : (
+              <>
+                <Icon name="Zap" className="w-6 h-6" /> BẮT ĐẦU QUÉT VÉ
+              </>
+            )}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          <div className="p-6 bg-emerald-500/10 border-4 border-emerald-500 rounded-[2rem] space-y-4">
+            <div className="flex justify-between items-center border-b border-emerald-500/20 pb-4">
+              <h3 className="text-2xl font-black tracking-tighter uppercase">{analyzedTicket.match}</h3>
+              <span className={`px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border-2 ${
+                analyzedTicket.status === 'won' ? 'border-emerald-500 text-emerald-500' :
+                analyzedTicket.status === 'lost' ? 'border-rose-500 text-rose-500' : 'border-yellow-500 text-yellow-500'
+              }`}>
+                {analyzedTicket.status === 'won' ? 'THẮNG' : analyzedTicket.status === 'lost' ? 'THUA' : 'ĐANG CHỜ'}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-[10px] font-black text-white/40 uppercase tracking-widest">KÈO ĐÃ ĐẶT</p>
+                <p className="text-lg font-black text-emerald-500">{analyzedTicket.bet}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] font-black text-white/40 uppercase tracking-widest">TIỀN CƯỢC</p>
+                <p className="text-lg font-mono font-black">{formatVNĐ(analyzedTicket.stake)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-black text-white/40 uppercase tracking-widest">TỶ LỆ ODDS</p>
+                <p className="text-lg font-mono font-black">{analyzedTicket.odds.toFixed(2)}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex gap-4">
+            <button
+              onClick={() => setAnalyzedTicket(null)}
+              className="flex-1 py-5 border-4 border-white rounded-2xl font-black uppercase text-sm hover:bg-white/10 transition-all"
+            >
+              QUÉT LẠI
+            </button>
+            <button
+              onClick={applyAnalyzedTicket}
+              className="flex-[2] py-5 bg-white text-black rounded-2xl font-black uppercase text-sm hover:bg-emerald-500 transition-all"
+            >
+              XÁC NHẬN & CẬP NHẬT LỊCH SỬ
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  </div>
+</motion.div>
+)}
+</AnimatePresence>
+
 <AnimatePresence>
 {showSettings && (
 <motion.div
