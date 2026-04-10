@@ -116,6 +116,34 @@ useEffect(() => {
   return () => unsubscribe();
 }, []);
 
+// Paste Listener (Ctrl+V)
+useEffect(() => {
+  const handlePaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        const file = items[i].getAsFile();
+        if (!file) continue;
+        setScanPreview(URL.createObjectURL(file));
+        setScanMimeType(file.type);
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64String = reader.result.split(',')[1];
+          setScanBase64(base64String);
+          setStep(1);
+          setFlashMessage("Đã dán ảnh từ bộ nhớ tạm! 📋");
+          setTimeout(() => setFlashMessage(null), 2000);
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
+    }
+  };
+  window.addEventListener('paste', handlePaste);
+  return () => window.removeEventListener('paste', handlePaste);
+}, []);
+
 // Sync to Firestore or LocalStorage
 useEffect(() => {
   if (user) {
@@ -926,7 +954,7 @@ LƯU THAY ĐỔI
 <footer className="max-w-4xl mx-auto mt-20 pt-10 border-t-4 border-white/10 flex flex-col sm:flex-row justify-between items-center gap-6 opacity-40">
 <div className="flex items-center gap-3">
 <Icon name="Info" className="w-5 h-5" />
-<p className="text-[10px] font-black uppercase tracking-widest">Institutional Grade Sports Analytics Engine v1.0.0</p>
+<p className="text-[10px] font-black uppercase tracking-widest">Institutional Grade Sports Analytics Engine v1.0.2</p>
 </div>
 <p className="text-[10px] font-mono font-black">© 2026 QUANTBET AI TERMINAL</p>
 </footer>
