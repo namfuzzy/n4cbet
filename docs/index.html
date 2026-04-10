@@ -198,15 +198,29 @@ return val.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") + ' VNĐ';
 function App() {
 const [user, setUser] = useState(null);
 const [step, setStep] = useState(1);
-const [bankroll, setBankroll] = useState(10000000);
-const [ledger, setLedger] = useState([]);
+const [bankroll, setBankroll] = useState(() => {
+  const saved = localStorage.getItem('qb_v5_bankroll');
+  return saved ? Number(saved) : 10000000;
+});
+const [ledger, setLedger] = useState(() => {
+  const saved = localStorage.getItem('qb_v5_ledger');
+  return saved ? JSON.parse(saved) : [];
+});
 const [strategy, setStrategy] = useState('1/4');
 const [showSettings, setShowSettings] = useState(false);
-const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
-const [aiProvider, setAiProvider] = useState('gemini');
-const [customApiKey, setCustomApiKey] = useState('');
-const [openRouterApiKey, setOpenRouterApiKey] = useState('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');
-const DEFAULT_OR_KEY = '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';
+const [selectedModel, setSelectedModel] = useState(() => {
+  return localStorage.getItem('qb_v7_model') || 'gemini-3-flash-preview';
+});
+const [aiProvider, setAiProvider] = useState(() => {
+  return localStorage.getItem('qb_v7_provider') || 'gemini';
+});
+const [customApiKey, setCustomApiKey] = useState(() => {
+  return localStorage.getItem('qb_v7_apikey') || '';
+});
+const [openRouterApiKey, setOpenRouterApiKey] = useState(() => {
+  return localStorage.getItem('qb_v7_orkey') || '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';
+});
+const DEFAULT_OR_KEY = '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';
 const [openRouterModels, setOpenRouterModels] = useState([]);
 const [isScanning, setIsScanning] = useState(false);
 const [isResearching, setIsResearching] = useState(false);
@@ -293,8 +307,11 @@ useEffect(() => {
 // Fetch OpenRouter Models
 useEffect(() => {
   // Force update old API key for existing users
-  const OLD_KEY = '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';
-  if (openRouterApiKey === OLD_KEY) {
+  const OLD_KEYS = [
+    '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',
+    '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'
+  ];
+  if (OLD_KEYS.includes(openRouterApiKey)) {
     console.log("Phát hiện API Key cũ, đang tự động cập nhật...");
     setOpenRouterApiKey(DEFAULT_OR_KEY);
   }
@@ -330,14 +347,25 @@ useEffect(() => {
       if (items[i].type.indexOf("image") !== -1) {
         const file = items[i].getAsFile();
         if (!file) continue;
-        setScanPreview(URL.createObjectURL(file));
-        setScanMimeType(file.type);
+        
         const reader = new FileReader();
         reader.onloadend = () => {
           const base64String = reader.result.split(',')[1];
-          setScanBase64(base64String);
-          setStep(1);
-          setFlashMessage("Đã dán ảnh từ bộ nhớ tạm! 📋");
+          const previewUrl = URL.createObjectURL(file);
+          
+          if (showVerifyModal) {
+            setVerifyPreview(previewUrl);
+            setVerifyMimeType(file.type);
+            setVerifyBase64(base64String);
+            setAnalyzedTicket(null); // Clear old analysis
+            setFlashMessage("Đã dán vé cược! 📋");
+          } else {
+            setScanPreview(previewUrl);
+            setScanMimeType(file.type);
+            setScanBase64(base64String);
+            setStep(1);
+            setFlashMessage("Đã dán ảnh phân tích! 📋");
+          }
           setTimeout(() => setFlashMessage(null), 2000);
         };
         reader.readAsDataURL(file);
@@ -347,7 +375,7 @@ useEffect(() => {
   };
   window.addEventListener('paste', handlePaste);
   return () => window.removeEventListener('paste', handlePaste);
-}, []);
+}, [showVerifyModal]);
 
 // Sync to Firestore or LocalStorage
 useEffect(() => {
@@ -1425,7 +1453,7 @@ className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[150] bg-white text-black
             ) : (
               <label className="block cursor-pointer py-12">
                 <Icon name="UploadCloud" className="w-16 h-16 mx-auto text-white/20 mb-4" />
-                <p className="text-sm font-black uppercase tracking-widest text-white/40">Tải lên ảnh chụp vé cược</p>
+                <p className="text-sm font-black uppercase tracking-widest text-white/40">Tải lên ảnh chụp vé cược hoặc nhấn Ctrl+V để dán</p>
                 <input type="file" className="hidden" accept="image/*" onChange={handleVerifyFileSelect} />
               </label>
             )}
