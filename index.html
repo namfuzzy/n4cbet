@@ -63,28 +63,27 @@ async function generateContent(apiKey, model, prompt, base64Image, mimeType, pro
   if (provider === 'openrouter') {
     const url = "https://openrouter.ai/api/v1/chat/completions";
     
-    let content = [];
-    if (base64Image && mimeType) {
-      content.push({
-        type: "image_url",
-        image_url: { url: `data:${mimeType};base64,${base64Image}` }
-      });
-    }
-    content.push({ type: "text", text: prompt });
+    // Chuẩn bị nội dung tin nhắn (Hỗ trợ cả ảnh và văn bản)
+    const messageContent = (base64Image && mimeType) 
+      ? [
+          { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } },
+          { type: "text", text: prompt }
+        ]
+      : prompt;
 
     const tryModel = async (m) => {
       try {
         const response = await fetch(url, {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${VIP_OR}`,
+            "Authorization": `Bearer ${VIP_OR.trim()}`,
             "Content-Type": "application/json",
-            "HTTP-Referer": window.location.origin || "https://quantbet-ai.vercel.app",
+            "HTTP-Referer": "https://openrouter.ai", // Sử dụng referer mặc định để tránh lỗi phân quyền
             "X-Title": "QuantBet AI"
           },
           body: JSON.stringify({
             model: m,
-            messages: [{ role: "user", content: content }],
+            messages: [{ role: "user", content: messageContent }],
             temperature: 0.7,
             ...(prompt.toLowerCase().includes("json") ? { response_format: { type: "json_object" } } : {})
           })
@@ -107,7 +106,7 @@ async function generateContent(apiKey, model, prompt, base64Image, mimeType, pro
     // Fallback nếu lỗi routing hoặc model không tồn tại
     if (!result.ok) {
       const errorStr = String(result.error).toLowerCase();
-      if (errorStr.includes("not found") || errorStr.includes("endpoint") || errorStr.includes("overloaded")) {
+      if (errorStr.includes("not found") || errorStr.includes("endpoint") || errorStr.includes("overloaded") || errorStr.includes("user")) {
         const fallbacks = ["google/gemini-flash-1.5-8b", "meta-llama/llama-3.1-8b-instruct:free", "mistralai/mistral-7b-instruct:free"];
         for (const fb of fallbacks) {
           if (fb === targetModel) continue;
