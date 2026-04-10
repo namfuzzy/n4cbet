@@ -288,6 +288,13 @@ useEffect(() => {
 
 // Fetch OpenRouter Models
 useEffect(() => {
+  // Force update old API key for existing users
+  const OLD_KEY = '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';
+  if (openRouterApiKey === OLD_KEY) {
+    console.log("Phát hiện API Key cũ, đang tự động cập nhật...");
+    setOpenRouterApiKey(DEFAULT_OR_KEY);
+  }
+
   const fetchModels = async () => {
     try {
       const response = await fetch("https://openrouter.ai/api/v1/models");
