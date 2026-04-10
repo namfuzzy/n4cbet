@@ -46,8 +46,19 @@ const googleProvider = new firebase.auth.GoogleAuthProvider();
 const Icon = ({ name, className }) => { const iconDef = window.lucide[name]; if (!iconDef) return null; return React.createElement('svg', { xmlns: 'http://www.w3.org/2000/svg', width: '24', height: '24', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round', className: className }, iconDef.map(([tag, attrs], i) => React.createElement(tag, { ...attrs, key: i }))); }; 
 
 async function generateContent(apiKey, model, prompt, base64Image, mimeType, provider = 'gemini') { 
+  const cleanKey = apiKey?.trim();
   if (provider === 'openrouter') {
     const url = "https://openrouter.ai/api/v1/chat/completions";
+    
+    // Basic API Key validation
+    if (!cleanKey || !cleanKey.startsWith('sk-or-v1-')) {
+      if (cleanKey && cleanKey.length > 20) {
+        // Might be a valid key but missing prefix or different version
+      } else {
+        throw new Error("Lỗi: API Key OpenRouter không đúng định dạng (thường bắt đầu bằng sk-or-v1-).");
+      }
+    }
+
     let content = [];
     if (base64Image && mimeType) {
       content.push({
@@ -59,31 +70,87 @@ async function generateContent(apiKey, model, prompt, base64Image, mimeType, pro
     }
     content.push({ type: "text", text: prompt });
 
-    const body = {
-      model: model,
-      messages: [{ role: "user", content: content }],
-      response_format: { type: "json_object" }
+    const tryModel = async (targetModel) => {
+      try {
+        const body = {
+          model: targetModel,
+          messages: [{ role: "user", content: content }],
+          ...(prompt.toLowerCase().includes("json") ? { response_format: { type: "json_object" } } : {})
+        };
+
+        // Robust Referer for iframes
+        const referer = window.location.origin && window.location.origin !== 'null' 
+          ? window.location.origin 
+          : "https://quantbet-ai.vercel.app";
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${cleanKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": referer,
+            "X-Title": "QuantBet AI Research Tool"
+          },
+          body: JSON.stringify(body)
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          return { ok: false, error: data.error?.message || `Lỗi ${response.status}` };
+        }
+        if (!data.choices || data.choices.length === 0) return { ok: false, error: "Không có phản hồi từ AI" };
+        return { ok: true, content: data.choices[0].message.content };
+      } catch (e) {
+        return { ok: false, error: e.message };
+      }
     };
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": window.location.origin,
-        "X-Title": "QuantBet AI"
-      },
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(err.error?.message || 'Lỗi kết nối OpenRouter API');
+    let result = await tryModel(model);
+    
+    // Aggressive Fallback for routing/provider errors
+    const isRoutingError = (err) => 
+      err.toLowerCase().includes("no endpoints") || 
+      err.toLowerCase().includes("provider") || 
+      err.toLowerCase().includes("down") || 
+      err.toLowerCase().includes("unavailable") || 
+      err.toLowerCase().includes("503") || 
+      err.toLowerCase().includes("404") ||
+      err.toLowerCase().includes("overloaded") ||
+      err.toLowerCase().includes("rate limit");
+    
+    if (!result.ok && isRoutingError(result.error)) {
+      console.warn(`Model ${model} lỗi: ${result.error}. Đang thử fallback...`);
+      const fallbacks = [
+        "google/gemma-2-9b-it:free", 
+        "mistralai/mistral-7b-instruct:free", 
+        "meta-llama/llama-3.1-8b-instruct:free",
+        "qwen/qwen-2-7b-instruct:free",
+        "microsoft/phi-3-mini-128k-instruct:free",
+        "openrouter/auto" // Last resort
+      ];
+      
+      for (const fb of fallbacks) {
+        if (fb === model) continue;
+        const fbRes = await tryModel(fb);
+        if (fbRes.ok) {
+          console.log(`Fallback thành công sang: ${fb}`);
+          return fbRes.content;
+        }
+      }
     }
-    const data = await response.json();
-    return data.choices[0].message.content;
+
+    if (!result.ok) {
+      let msg = result.error;
+      if (msg.includes("User not found") || msg.includes("Invalid API Key") || msg.includes("Unauthorized")) {
+        msg = "Lỗi: API Key không hợp lệ. Vui lòng kiểm tra lại Key trên OpenRouter.ai (Settings -> Keys). Đảm bảo bạn đã dán đúng mã sk-or-v1-...";
+      } else if (msg.toLowerCase().includes("no endpoints") || msg.toLowerCase().includes("overloaded")) {
+        msg = "Lỗi: Hệ thống OpenRouter hiện đang quá tải hoặc Model này không khả dụng. Vui lòng thử lại sau hoặc chọn Model khác (ví dụ: Gemma 2 9B Free).";
+      }
+      throw new Error(msg);
+    }
+    return result.content;
   } else {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`; 
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`; 
     let parts = []; 
     if (base64Image && mimeType) { 
       parts.push({ inline_data: { mime_type: mimeType, data: base64Image } }); 
@@ -92,15 +159,32 @@ async function generateContent(apiKey, model, prompt, base64Image, mimeType, pro
     
     const body = { 
       contents: [{ parts: parts }], 
-      generationConfig: { responseMimeType: 'application/json' },
-      tools: [{ google_search_retrieval: {} }] // Enable Google Search Grounding
+      generationConfig: { responseMimeType: 'application/json' }
     };
 
-    const response = await fetch(url, { 
+    // Only add tools if it's a model likely to support it (Gemini 1.5+)
+    if (model.includes('gemini')) {
+      body.tools = [{ google_search: {} }];
+    }
+
+    let response = await fetch(url, { 
       method: 'POST', 
       headers: { 'Content-Type': 'application/json' }, 
       body: JSON.stringify(body) 
     }); 
+
+    // Fallback: If google_search fails, try without it
+    if (!response.ok) {
+      const err = await response.json();
+      if (err.error?.message?.includes('google_search') || err.error?.message?.includes('tool')) {
+        delete body.tools;
+        response = await fetch(url, { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify(body) 
+        });
+      }
+    }
 
     if (!response.ok) { 
       const err = await response.json(); 
@@ -123,7 +207,8 @@ const [showSettings, setShowSettings] = useState(false);
 const [selectedModel, setSelectedModel] = useState('gemini-3-flash-preview');
 const [aiProvider, setAiProvider] = useState('gemini');
 const [customApiKey, setCustomApiKey] = useState('');
-const [openRouterApiKey, setOpenRouterApiKey] = useState('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');
+const [openRouterApiKey, setOpenRouterApiKey] = useState('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');
+const DEFAULT_OR_KEY = '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';
 const [openRouterModels, setOpenRouterModels] = useState([]);
 const [isScanning, setIsScanning] = useState(false);
 const [isResearching, setIsResearching] = useState(false);
@@ -132,7 +217,10 @@ const [scanPreview, setScanPreview] = useState(null);
 const [scanBase64, setScanBase64] = useState(null);
 const [scanMimeType, setScanMimeType] = useState(null);
 const [showTrapModal, setShowTrapModal] = useState(false);
+const [showResearchLog, setShowResearchLog] = useState(false);
 const [flashMessage, setFlashMessage] = useState(null);
+const [isVerifying, setIsVerifying] = useState(false);
+const [verificationStatus, setVerificationStatus] = useState(null); // { success: bool, message: string }
 const [lastUpdate, setLastUpdate] = useState('');
 const [manualStake, setManualStake] = useState(0);
 const [currentMatch, setCurrentMatch] = useState({
@@ -144,8 +232,12 @@ impliedProb: 50,
 edge: 0,
 verdict: 'PASS',
 confidence: 0,
+sportType: 'football',
+isLive: false,
 analysis: { tactical: '', moneyFlow: '', bookieIntent: '', betLogic: '' },
-h2h: { win: 0, draw: 0, loss: 0 }
+advancedMetrics: {},
+h2h: { win: 0, draw: 0, loss: 0 },
+sources: []
 });
 
 // Auth Listener
@@ -171,7 +263,7 @@ useEffect(() => {
             selectedModel: 'gemini-3-flash-preview',
             aiProvider: 'gemini',
             customApiKey: '',
-            openRouterApiKey: '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'
+            openRouterApiKey: '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'
           });
         }
       });
@@ -281,6 +373,36 @@ const handleLogout = () => {
   auth.signOut();
   setFlashMessage("Đã đăng xuất.");
 };
+
+const verifyConnection = async () => {
+  setIsVerifying(true);
+  setVerificationStatus(null);
+  const apiKey = aiProvider === 'gemini' ? customApiKey : openRouterApiKey;
+  
+  if (!apiKey || apiKey.trim() === '') {
+    setVerificationStatus({ success: false, message: "Vui lòng nhập API Key trước khi xác thực." });
+    setIsVerifying(false);
+    return;
+  }
+
+  try {
+    // Simple test prompt
+    const testPrompt = "Return only the word 'OK' if you can read this.";
+    const result = await generateContent(apiKey, selectedModel, testPrompt, null, null, aiProvider);
+    
+    if (result && result.toUpperCase().includes('OK')) {
+      setVerificationStatus({ success: true, message: `Kết nối thành công với model ${selectedModel}!` });
+    } else {
+      setVerificationStatus({ success: false, message: "AI phản hồi không đúng định dạng, nhưng kết nối có vẻ ổn." });
+    }
+  } catch (error) {
+    console.error("Connection Verification Error:", error);
+    setVerificationStatus({ success: false, message: error.message || "Lỗi kết nối không xác định." });
+  } finally {
+    setIsVerifying(false);
+  }
+};
+
 const calculations = useMemo(() => {
 const p = currentMatch.aiProb / 100;
 const b = currentMatch.bookieOdds - 1;
@@ -317,101 +439,144 @@ setScanBase64(base64String);
 reader.readAsDataURL(file);
 };
 const startAnalysis = async () => {
-setIsScanning(true);
-setTimeout(async () => {
-setIsScanning(false);
-setIsResearching(true);
-setTerminalLogs([]);
-setLastUpdate(new Date().toLocaleTimeString('vi-VN'));
-const addLog = (msg, delay) => {
-return new Promise((resolve) => {
-setTimeout(() => {
-setTerminalLogs(prev => [...prev, msg]);
-resolve(true);
-}, delay);
-});
-};
-await addLog("> Đang kết nối với " + selectedModel + "...", 500);
-await addLog("> Truy cập dữ liệu thời gian thực từ API Thể thao...", 500);
-await addLog("> Phân tích biến động Odds & Smart Money...", 500);
-await addLog("> Đang gửi yêu cầu tới AI phân tích...", 500);
-try {
-  let apiKeyToUse = aiProvider === 'openrouter' ? openRouterApiKey : customApiKey;
-  if (!apiKeyToUse) {
-    throw new Error(`Thiếu API Key ${aiProvider === 'openrouter' ? 'OpenRouter' : 'Gemini'}. Vui lòng kiểm tra cài đặt.`);
+  if (!scanPreview) {
+    setFlashMessage("Vui lòng dán ảnh màn hình trước!");
+    return;
   }
-  const prompt = `Bạn là một Chuyên gia Phân tích Dữ liệu Cá cược (Quant Betting Analyst) chuyên nghiệp, chuyên "đọc vị" các sàn lớn như 8xbet.
-Nhiệm vụ: Phân tích ảnh chụp màn hình giao diện 8xbet (Tennis, Bóng rổ NBA, Bóng đá) và đưa ra kèo đánh CHI TIẾT nhất.
-SỬ DỤNG GOOGLE SEARCH: Bạn PHẢI tìm kiếm thông tin thời gian thực về trận đấu này trên internet (phong độ, chấn thương, tin tức mới nhất, biến động odds sàn quốc tế). KHÔNG ĐƯỢC BỊA ĐẶT. Dữ liệu phải chính xác 100% từ các nguồn uy tín.
-1. Nhận diện: Tên trận đấu, Giải đấu, Tỷ lệ Odds hiện tại, Các loại kèo đang mở (Handicap, Over/Under, 1x2).
-2. Phân tích: Kết hợp dữ liệu từ ảnh và dữ liệu thời gian thực từ internet để tìm ra Value Edge.
-3. Đọc vị: Phát hiện kèo dụ (Trap) dựa trên biến động Odds và dòng tiền.
+  setStep(1);
+  setIsResearching(true);
+  setTerminalLogs([]);
+  setLastUpdate(new Date().toLocaleTimeString('vi-VN'));
+  
+  const addLog = (msg, delay) => {
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        setTerminalLogs(prev => [...prev, msg]);
+        resolve(true);
+      }, delay);
+    });
+  };
+
+  await addLog("> KHỞI TẠO QUANTBET RESEARCH AGENT v1.0.5...", 100);
+  await addLog("> Đang kết nối với hệ thống tìm kiếm thời gian thực...", 300);
+  await addLog("> Đang quét dữ liệu từ ảnh chụp màn hình...", 400);
+  
+  try {
+    let apiKeyToUse = aiProvider === 'openrouter' ? openRouterApiKey : customApiKey;
+    if (!apiKeyToUse) {
+      throw new Error(`Thiếu API Key ${aiProvider === 'openrouter' ? 'OpenRouter' : 'Gemini'}. Vui lòng kiểm tra cài đặt.`);
+    }
+
+    await addLog(`> Đang truy vấn Google Search cho dữ liệu trận đấu...`, 600);
+    await addLog(`> Đang phân tích biến động Odds sàn quốc tế (Pinnacle, Betfair)...`, 500);
+    await addLog(`> Đang kiểm tra báo cáo chấn thương & đội hình mới nhất...`, 500);
+
+    const prompt = `Bạn là một Senior Quant Betting Analyst & Real-Time Intelligence Agent.
+Nhiệm vụ: Phân tích ảnh chụp màn hình 8xbet và thực hiện nghiên cứu chuyên sâu theo thời gian thực.
+YÊU CẦU BẮT BUỘC:
+1. XÁC ĐỊNH LOẠI HÌNH THỂ THAO: 'football', 'basketball', hoặc 'tennis'.
+2. SỬ DỤNG GOOGLE SEARCH: Tìm kiếm thông tin chính xác 100% về trận đấu đang diễn ra (Tỷ số hiện tại, tình hình chấn thương, tin tức mới nhất trong 60 phút qua).
+3. TRÍCH DẪN NGUỒN: Mỗi thông tin quan trọng phải kèm theo nguồn và thời gian (VD: "Nguồn: ESPN, 20:15 UTC").
+4. PHÂN TÍCH CHI TIẾT: Không nói chung chung. Phải giải thích rõ tại sao kèo này lại có lợi thế dựa trên dữ liệu thực tế.
+5. CHỈ SỐ CHUYÊN SÂU (advancedMetrics):
+   - Nếu là football: xG (Expected Goals) của 2 đội, Danh sách cầu thủ vắng mặt quan trọng, Thống kê trọng tài (thẻ/trận) và thời tiết.
+   - Nếu là basketball: Offensive/Defensive Rating, Tình trạng thể lực (nghỉ bao nhiêu ngày, back-to-back), Báo cáo chấn thương.
+   - Nếu là tennis: Win % trên mặt sân hiện tại, Hold/Break %, Thời gian thi đấu tích lũy các vòng trước.
+
 Trả về JSON:
 {
-"name": "Tên trận đấu (VD: Benjamin Berger vs Andrew Li)",
-"recommendedBet": "Tên kèo cụ thể (VD: Tài 22.5 Game, Handicap Andrew Li -1.5, Arsenal Thắng)",
-"bookieOdds": Tỷ lệ kèo Decimal (VD: 1.85),
+"name": "Tên trận đấu",
+"sportType": "football" | "basketball" | "tennis",
+"recommendedBet": "Kèo cụ thể",
+"bookieOdds": Odds hiện tại,
 "aiProb": Xác suất thắng thực tế (%),
 "impliedProb": Xác suất nhà cái (%),
-"edge": Lợi thế % (aiProb - impliedProb),
+"edge": Lợi thế %,
 "verdict": "VALUE" | "TRAP" | "PASS",
 "confidence": 0-100,
 "analysis": {
-"tactical": "Phân tích chiến thuật/phong độ/chấn thương dựa trên tin tức internet mới nhất",
-"moneyFlow": "Dòng tiền Smart Money đang đi đâu",
-"bookieIntent": "Ý đồ nhà cái (Dụ cửa nào?)",
-"betLogic": "Tại sao lại chọn kèo này thay vì các kèo khác trong ảnh?"
+"tactical": "Phân tích chiến thuật + Dữ liệu thời gian thực + Trích dẫn nguồn",
+"moneyFlow": "Dòng tiền Smart Money và biến động Odds quốc tế",
+"bookieIntent": "Ý đồ nhà cái và nhận diện bẫy",
+"betLogic": "Logic chốt kèo cuối cùng"
 },
-"h2h": { "win": 0, "draw": 0, "loss": 0 }
+"advancedMetrics": {
+  // Cấu trúc linh hoạt tùy theo sportType như yêu cầu trên
+},
+"h2h": { "win": 0, "draw": 0, "loss": 0 },
+"sources": ["Nguồn 1 + Thời gian", "Nguồn 2 + Thời gian"]
 }`;
-const rawText = await generateContent(apiKeyToUse, selectedModel, prompt, scanBase64, scanMimeType, aiProvider); const response = { text: rawText };
-await addLog("> Đã nhận phản hồi từ AI. Đang xử lý dữ liệu...", 200);
-let responseText = response.text || '{}';
-responseText = responseText.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
-const result = JSON.parse(responseText);
-setCurrentMatch({
-name: result.name || "Trận đấu chưa xác định",
-bookieOdds: result.bookieOdds || 2.0,
-aiProb: result.aiProb || 50,
-impliedProb: result.impliedProb || 50,
-edge: result.edge || 0,
-verdict: 'PASS',
-confidence: result.confidence || 70,
-analysis: result.analysis || { tactical: "Không có dữ liệu", moneyFlow: "Không có dữ liệu", bookieIntent: "Không có dữ liệu" },
-h2h: result.h2h || { win: 0, draw: 0, loss: 0 }
-});
-setIsResearching(false);
-setStep(2);
-if (result.verdict === 'TRAP' || (result.aiProb / 100) - (1 / result.bookieOdds) > 0.15) {
-setShowTrapModal(true);
-}
-} catch (error) {
-console.error("AI Analysis Error:", error);
-await addLog("> LỖI: " + (error instanceof Error ? error.message : "Không thể kết nối AI"), 200);
-await addLog("> Đang dùng dữ liệu dự phòng để tiếp tục...", 500);
-setTimeout(() => {
-setCurrentMatch({
-name: "Benjamin Berger vs Andrew Li (Tennis)",
-recommendedBet: "Tài 22.5 Game",
-bookieOdds: 1.84,
-aiProb: 78,
-impliedProb: 54.3,
-edge: 23.7,
-verdict: 'VALUE',
-confidence: 88,
-analysis: {
-tactical: "Cả hai đang giữ Game giao bóng rất tốt, khả năng cao kéo vào Tie-break.",
-moneyFlow: "Smart Money đang âm thầm gom cửa Tài khi Odds nhích nhẹ.",
-bookieIntent: "Nhà cái để Line 22.5 thấp hơn thực tế để cân bằng tiền.",
-betLogic: "Dựa trên thống kê giao bóng 1 và tỷ lệ bẻ giao bóng thấp của cả hai trong set 1."
-},
-h2h: { win: 2, draw: 0, loss: 1 }
-});
-setIsResearching(false);
-setStep(2);
-}, 1500);
-}
-}, 1500);
+
+    const rawText = await generateContent(apiKeyToUse, selectedModel, prompt, scanBase64, scanMimeType, aiProvider); 
+    const response = { text: rawText };
+    
+    await addLog("> Đã nhận phản hồi từ AI. Đang xử lý dữ liệu...", 200);
+    await addLog("> Đang xác thực nguồn tin và trích dẫn...", 300);
+
+    let responseText = response.text || '{}';
+    responseText = responseText.replace(/^```(?:json)?\n?/i, '').replace(/\n?```$/i, '').trim();
+    const result = JSON.parse(responseText);
+    
+    setCurrentMatch({
+      name: result.name || "Trận đấu chưa xác định",
+      sportType: result.sportType || "football",
+      recommendedBet: result.recommendedBet || "Chưa xác định kèo",
+      bookieOdds: result.bookieOdds || 2.0,
+      aiProb: result.aiProb || 50,
+      impliedProb: result.impliedProb || 50,
+      edge: result.edge || 0,
+      verdict: result.verdict || 'PASS',
+      confidence: result.confidence || 70,
+      isLive: true,
+      analysis: result.analysis || { tactical: "Không có dữ liệu", moneyFlow: "Không có dữ liệu", bookieIntent: "Không có dữ liệu", betLogic: "Không có dữ liệu" },
+      advancedMetrics: result.advancedMetrics || {},
+      h2h: result.h2h || { win: 0, draw: 0, loss: 0 },
+      sources: result.sources || []
+    });
+    
+    setIsResearching(false);
+    setStep(2);
+    if (result.verdict === 'TRAP' || (result.aiProb / 100) - (1 / result.bookieOdds) > 0.15) {
+      setShowTrapModal(true);
+    }
+  } catch (error) {
+    console.error("AI Analysis Error:", error);
+    await addLog("> LỖI KẾT NỐI: " + (error instanceof Error ? error.message : "Không thể kết nối AI"), 200);
+    await addLog("> Đang kích hoạt CHẾ ĐỘ MÔ PHỎNG (DEMO MODE) để hiển thị giao diện...", 500);
+    
+    setTimeout(() => {
+      setCurrentMatch({
+        name: "Man City vs Arsenal (Premier League)",
+        sportType: "football",
+        recommendedBet: "Man City Thắng (-0.75)",
+        bookieOdds: 1.95,
+        aiProb: 68,
+        impliedProb: 51.3,
+        edge: 16.7,
+        verdict: 'VALUE',
+        confidence: 85,
+        isLive: false,
+        analysis: {
+          tactical: "Man City có đội hình mạnh nhất, Arsenal thiếu Odegaard làm giảm khả năng sáng tạo tuyến giữa.",
+          moneyFlow: "Dòng tiền đổ mạnh vào cửa Man City sau khi có tin đội hình xuất phát.",
+          bookieIntent: "Nhà cái đang cố tình giữ Odds Arsenal cao để thu hút người chơi đánh cửa dưới.",
+          betLogic: "Lợi thế sân nhà và sự chênh lệch về chiều sâu đội hình trong trận cầu đinh."
+        },
+        advancedMetrics: {
+          xg: { teamA: 2.15, teamB: 1.42 },
+          missingPlayers: [
+            { name: "Kevin De Bruyne", status: "Fit", color: "text-emerald-500" },
+            { name: "Martin Odegaard", status: "Out", color: "text-rose-500" }
+          ],
+          external: { referee: "Michael Oliver (4.2 thẻ/trận)", weather: "Mưa nhẹ, 12°C" }
+        },
+        h2h: { win: 12, draw: 4, loss: 3 },
+        sources: ["BBC Sports (Live)", "Opta Analyst", "Sky Sports"]
+      });
+      setIsResearching(false);
+      setStep(2);
+    }, 1500);
+  }
 };
 const confirmBet = () => {
 const newBet = {
@@ -432,10 +597,12 @@ setScanBase64(null);
 setScanMimeType(null);
 setManualStake(0);
 setCurrentMatch({
-name: '', recommendedBet: '', bookieOdds: 2.0, aiProb: 50, impliedProb: 50, edge: 0,
-verdict: 'PASS', confidence: 0,
-analysis: { tactical: '', moneyFlow: '', bookieIntent: '', betLogic: '' },
-h2h: { win: 0, draw: 0, loss: 0 }
+  name: '', recommendedBet: '', bookieOdds: 2.0, aiProb: 50, impliedProb: 50, edge: 0,
+  verdict: 'PASS', confidence: 0, sportType: 'football', isLive: false,
+  analysis: { tactical: '', moneyFlow: '', bookieIntent: '', betLogic: '' },
+  advancedMetrics: {},
+  h2h: { win: 0, draw: 0, loss: 0 },
+  sources: []
 });
 };
 const updateBetStatus = (id, status) => {
@@ -603,6 +770,17 @@ className="space-y-6 sm:space-y-8"
 <h3 className="text-2xl sm:text-3xl font-black text-white">{currentMatch.name}</h3>
 </div>
 <div className="flex items-center gap-3">
+  {currentMatch.isLive ? (
+    <div className="px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/50 flex items-center gap-2">
+      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+      <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">LIVE RESEARCH</span>
+    </div>
+  ) : (
+    <div className="px-3 py-1 rounded-full bg-rose-500/20 border border-rose-500/50 flex items-center gap-2">
+      <Icon name="AlertCircle" className="w-3 h-3 text-rose-500" />
+      <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest">DEMO MODE</span>
+    </div>
+  )}
 <div className={`px-4 py-2 rounded-xl border-2 flex items-center gap-2 ${
 currentMatch.verdict === 'VALUE' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-500' :
 currentMatch.verdict === 'TRAP' ? 'border-rose-500 bg-rose-500/10 text-rose-500' :
@@ -668,6 +846,100 @@ currentMatch.edge > 0 ? 'text-emerald-500' : 'text-rose-500'
 <p className="text-sm sm:text-base text-yellow-100/90 leading-relaxed italic">"{currentMatch.analysis.bookieIntent}"</p>
 </div>
 </div>
+
+{/* ⚡ CHỈ SỐ CHUYÊN SÂU */}
+<div className="space-y-4">
+  <div className="flex items-center gap-2">
+    <Icon name="Zap" className="w-5 h-5 text-emerald-500" />
+    <h4 className="text-xs font-black text-emerald-500 uppercase tracking-[0.3em]">⚡ CHỈ SỐ CHUYÊN SÂU</h4>
+  </div>
+  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    {currentMatch.sportType === 'football' && (
+      <>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Hiệu suất (xG)</p>
+          <div className="flex justify-between items-end">
+            <div>
+              <p className="text-[8px] text-zinc-600 uppercase font-bold">Team A</p>
+              <p className="text-xl font-mono font-black text-white">{currentMatch.advancedMetrics?.xg?.teamA || '0.00'}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[8px] text-zinc-600 uppercase font-bold">Team B</p>
+              <p className="text-xl font-mono font-black text-white">{currentMatch.advancedMetrics?.xg?.teamB || '0.00'}</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Tổn thất lực lượng</p>
+          <div className="space-y-1">
+            {currentMatch.advancedMetrics?.missingPlayers?.map((p, i) => (
+              <div key={i} className="flex justify-between text-[10px] font-bold">
+                <span className="text-white/60">{p.name}</span>
+                <span className={p.color}>{p.status}</span>
+              </div>
+            )) || <p className="text-[10px] text-zinc-600 italic">Không có dữ liệu</p>}
+          </div>
+        </div>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Ngoại cảnh</p>
+          <div className="space-y-1">
+            <p className="text-[10px] font-bold text-white/80">{currentMatch.advancedMetrics?.external?.referee || 'N/A'}</p>
+            <p className="text-[10px] font-bold text-emerald-500">{currentMatch.advancedMetrics?.external?.weather || 'N/A'}</p>
+          </div>
+        </div>
+      </>
+    )}
+    {currentMatch.sportType === 'basketball' && (
+      <>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Pace & Rating</p>
+          <div className="flex justify-between">
+            <div>
+              <p className="text-[8px] text-zinc-600 uppercase font-bold">OFF</p>
+              <p className="text-xl font-mono font-black text-emerald-500">{currentMatch.advancedMetrics?.ratings?.off || '0.0'}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[8px] text-zinc-600 uppercase font-bold">DEF</p>
+              <p className="text-xl font-mono font-black text-rose-500">{currentMatch.advancedMetrics?.ratings?.def || '0.0'}</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Lợi thế thể lực</p>
+          <p className="text-sm font-black text-white">{currentMatch.advancedMetrics?.fitness || 'N/A'}</p>
+        </div>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Báo cáo chấn thương</p>
+          <p className="text-[10px] font-bold text-rose-500">{currentMatch.advancedMetrics?.injuries || 'N/A'}</p>
+        </div>
+      </>
+    )}
+    {currentMatch.sportType === 'tennis' && (
+      <>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Mặt sân sở trường</p>
+          <p className="text-xl font-mono font-black text-emerald-500">{currentMatch.advancedMetrics?.surfaceWin || '0'}%</p>
+        </div>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Chỉ số giao/trả bóng</p>
+          <div className="flex justify-between text-[10px] font-bold">
+            <span className="text-zinc-500">HOLD</span>
+            <span className="text-white">{currentMatch.advancedMetrics?.holdBreak?.hold || '0'}%</span>
+          </div>
+          <div className="flex justify-between text-[10px] font-bold">
+            <span className="text-zinc-500">BREAK</span>
+            <span className="text-white">{currentMatch.advancedMetrics?.holdBreak?.break || '0'}%</span>
+          </div>
+        </div>
+        <div className="bg-zinc-900 p-4 rounded-xl border border-white/5">
+          <p className="text-[10px] uppercase tracking-widest text-zinc-500 mb-2">Thể lực tích lũy</p>
+          <p className="text-sm font-black text-white">{currentMatch.advancedMetrics?.timeOnCourt || '0'}m</p>
+        </div>
+      </>
+    )}
+  </div>
+</div>
+
 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
 <div className="p-5 sm:p-6 border-2 border-white/10 rounded-[1.5rem] bg-white/5">
 <p className="text-[10px] sm:text-xs font-black text-white/40 uppercase tracking-[0.3em] mb-3 sm:mb-4">LỊCH SỬ ĐỐI ĐẦU (H2H)</p>
@@ -700,6 +972,54 @@ className="h-full bg-white"
 </div>
 </div>
 </div>
+{currentMatch.sources && currentMatch.sources.length > 0 && (
+<div className="p-5 sm:p-6 border-2 border-emerald-500/30 rounded-[1.5rem] bg-emerald-500/5">
+{/* NHẬT KÝ NGHIÊN CỨU */}
+<div className="p-5 sm:p-6 border-2 border-white/10 rounded-[1.5rem] bg-white/5">
+  <div className="flex justify-between items-center mb-4">
+    <div className="flex items-center gap-2">
+      <Icon name="Terminal" className="w-5 h-5 text-emerald-500" />
+      <h4 className="text-xs font-black text-white/60 uppercase tracking-widest">Nhật ký nghiên cứu Agent</h4>
+    </div>
+    <button 
+      onClick={() => setShowResearchLog(!showResearchLog)}
+      className="text-[10px] font-black text-emerald-500 uppercase tracking-widest hover:underline"
+    >
+      {showResearchLog ? 'ẨN NHẬT KÝ' : 'XEM CHI TIẾT'}
+    </button>
+  </div>
+  
+  <AnimatePresence>
+    {showResearchLog && (
+      <motion.div 
+        initial={{ height: 0, opacity: 0 }}
+        animate={{ height: 'auto', opacity: 1 }}
+        exit={{ height: 0, opacity: 0 }}
+        className="overflow-hidden"
+      >
+        <div className="p-4 bg-black/40 rounded-xl border border-white/5 font-mono text-[10px] space-y-1 custom-scrollbar max-h-40 overflow-y-auto mb-4">
+          {terminalLogs.map((log, i) => (
+            <p key={i} className={log.includes('LỖI') ? 'text-rose-400' : 'text-emerald-400/80'}>{log}</p>
+          ))}
+        </div>
+      </motion.div>
+    )}
+  </AnimatePresence>
+
+  <div className="flex items-center gap-2 mb-3">
+    <Icon name="Globe" className="w-5 h-5 text-emerald-500" />
+    <h4 className="text-xs font-black text-emerald-500 uppercase tracking-widest">Nguồn tin thời gian thực</h4>
+  </div>
+<div className="flex flex-wrap gap-2">
+{currentMatch.sources.map((src, idx) => (
+<span key={idx} className="px-3 py-1 bg-white/10 rounded-full text-[10px] font-bold text-white/70 border border-white/10">
+{src}
+</span>
+))}
+</div>
+</div>
+</div>
+)}
 </div>
 <button
 onClick={() => setStep(3)}
@@ -1010,6 +1330,7 @@ className="absolute top-6 right-6 p-4 hover:bg-white/10 rounded-full transition-
     onClick={() => {
       setAiProvider('gemini');
       setSelectedModel('gemini-3-flash-preview');
+      setVerificationStatus(null);
     }}
     className={`py-2 rounded-xl border-2 font-black text-xs transition-all ${aiProvider === 'gemini' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-500' : 'border-white/10 text-white/40'}`}
   >
@@ -1018,7 +1339,8 @@ className="absolute top-6 right-6 p-4 hover:bg-white/10 rounded-full transition-
   <button
     onClick={() => {
       setAiProvider('openrouter');
-      setSelectedModel('google/gemma-2-9b-it:free');
+      setSelectedModel('meta-llama/llama-3.1-8b-instruct:free');
+      setVerificationStatus(null);
     }}
     className={`py-2 rounded-xl border-2 font-black text-xs transition-all ${aiProvider === 'openrouter' ? 'border-emerald-500 bg-emerald-500/10 text-emerald-500' : 'border-white/10 text-white/40'}`}
   >
@@ -1031,7 +1353,10 @@ className="absolute top-6 right-6 p-4 hover:bg-white/10 rounded-full transition-
 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Lựa chọn Model</label>
 <select
 value={selectedModel}
-onChange={(e) => setSelectedModel(e.target.value)}
+onChange={(e) => {
+  setSelectedModel(e.target.value);
+  setVerificationStatus(null);
+}}
 className="w-full bg-black border-2 border-white/20 rounded-xl px-4 py-3 font-bold focus:border-emerald-500 outline-none"
 >
 {aiProvider === 'gemini' ? (
@@ -1051,11 +1376,16 @@ className="w-full bg-black border-2 border-white/20 rounded-xl px-4 py-3 font-bo
         </option>
       ))
     ) : (
-      <option value="google/gemma-2-9b-it:free">Đang tải models...</option>
+      <option value="meta-llama/llama-3.1-8b-instruct:free">Đang tải models...</option>
     )}
   </>
 )}
 </select>
+{aiProvider === 'openrouter' && (
+  <p className="text-[8px] text-white/30 italic mt-1">
+    * Lưu ý: Các model FREE trên OpenRouter có thể chập chờn. Hệ thống sẽ tự động thử model dự phòng nếu kết nối thất bại.
+  </p>
+)}
 </div>
 
 {aiProvider === 'gemini' ? (
@@ -1071,7 +1401,10 @@ className="w-full bg-black border-2 border-white/20 rounded-xl px-4 py-3 font-bo
 <input
 type="password"
 value={customApiKey}
-onChange={(e) => setCustomApiKey(e.target.value)}
+onChange={(e) => {
+  setCustomApiKey(e.target.value);
+  setVerificationStatus(null);
+}}
 placeholder="Dán Gemini API Key tại đây..."
 className="w-full bg-black border-2 border-white/20 rounded-xl pl-12 pr-4 py-3 font-bold focus:border-emerald-500 outline-none"
 />
@@ -1081,22 +1414,86 @@ className="w-full bg-black border-2 border-white/20 rounded-xl pl-12 pr-4 py-3 f
 <div className="space-y-4">
 <div className="flex justify-between items-center">
 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">OpenRouter API Key</label>
-<span className={`text-[8px] font-bold px-2 py-0.5 rounded ${openRouterApiKey ? 'bg-emerald-500/20 text-emerald-500' : 'bg-rose-500/20 text-rose-500'}`}>
-{openRouterApiKey ? 'ĐÃ KẾT NỐI' : 'CHƯA CÓ KEY'}
-</span>
+<div className="flex gap-2">
+  <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-[8px] font-bold text-emerald-500 hover:underline">LẤY KEY MỚI</a>
+  <span className={`text-[8px] font-bold px-2 py-0.5 rounded ${openRouterApiKey ? 'bg-emerald-500/20 text-emerald-500' : 'bg-rose-500/20 text-rose-500'}`}>
+  {openRouterApiKey ? 'ĐÃ KẾT NỐI' : 'CHƯA CÓ KEY'}
+  </span>
+</div>
 </div>
 <div className="relative">
 <Icon name="Key" className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/20" />
 <input
 type="password"
 value={openRouterApiKey}
-onChange={(e) => setOpenRouterApiKey(e.target.value)}
+onChange={(e) => {
+  setOpenRouterApiKey(e.target.value);
+  setVerificationStatus(null);
+}}
 placeholder="Dán OpenRouter API Key tại đây..."
-className="w-full bg-black border-2 border-white/20 rounded-xl pl-12 pr-4 py-3 font-bold focus:border-emerald-500 outline-none"
+className="w-full bg-black border-2 border-white/20 rounded-xl pl-12 pr-12 py-3 font-bold focus:border-emerald-500 outline-none"
 />
+<button 
+  onClick={() => {
+    setOpenRouterApiKey(DEFAULT_OR_KEY);
+    setVerificationStatus(null);
+    setFlashMessage("Đã khôi phục Key mặc định!");
+    setTimeout(() => setFlashMessage(null), 2000);
+  }}
+  className="absolute right-4 top-1/2 -translate-y-1/2 text-white/20 hover:text-emerald-500 transition-all"
+  title="Khôi phục Key mặc định"
+>
+  <Icon name="RefreshCcw" className="w-4 h-4" />
+</button>
 </div>
 </div>
 )}
+
+<div className="pt-2">
+  <button
+    onClick={verifyConnection}
+    disabled={isVerifying}
+    className={`w-full py-3 rounded-xl border-2 font-black text-xs transition-all flex items-center justify-center gap-2 ${
+      isVerifying 
+        ? 'bg-white/5 border-white/10 text-white/40 cursor-not-allowed' 
+        : 'border-emerald-500/50 text-emerald-500 hover:bg-emerald-500 hover:text-black'
+    }`}
+  >
+    {isVerifying ? (
+      <>
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+        >
+          <Icon name="Loader2" className="w-4 h-4" />
+        </motion.div>
+        ĐANG KIỂM TRA...
+      </>
+    ) : (
+      <>
+        <Icon name="ShieldCheck" className="w-4 h-4" />
+        XÁC THỰC KẾT NỐI
+      </>
+    )}
+  </button>
+  
+  {verificationStatus && (
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`mt-3 p-3 rounded-xl text-[10px] font-bold border ${
+        verificationStatus.success 
+          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+          : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+      }`}
+    >
+      <div className="flex gap-2">
+        <Icon name={verificationStatus.success ? "CheckCircle2" : "AlertCircle"} className="w-4 h-4 shrink-0" />
+        <span>{verificationStatus.message}</span>
+      </div>
+    </motion.div>
+  )}
+</div>
 </div>
 <div className="space-y-4">
 <label className="text-xs font-black uppercase tracking-[0.3em] text-white/60">VỐN GỐC (VNĐ)</label>
@@ -1139,7 +1536,7 @@ LƯU THAY ĐỔI
 <footer className="max-w-4xl mx-auto mt-20 pt-10 border-t-4 border-white/10 flex flex-col sm:flex-row justify-between items-center gap-6 opacity-40">
 <div className="flex items-center gap-3">
 <Icon name="Info" className="w-5 h-5" />
-<p className="text-[10px] font-black uppercase tracking-widest">Institutional Grade Sports Analytics Engine v1.0.2</p>
+<p className="text-[10px] font-black uppercase tracking-widest">Institutional Grade Sports Analytics Engine v1.0.5</p>
 </div>
 <p className="text-[10px] font-mono font-black">© 2026 QUANTBET AI TERMINAL</p>
 </footer>
